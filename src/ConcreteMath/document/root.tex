@@ -1,0 +1,47 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage{isabelle,isabellesym}
+
+% this should be the last package used
+\usepackage{pdfsetup}
+
+% urls in roman style, theory text in math-similar italics
+\urlstyle{rm}
+\isabellestyle{it}
+
+
+\begin{document}
+
+\title{Concretemath --- formally verified implementation of Metamath proof verifier}
+\author{Remimimimimi}
+\maketitle
+
+\begin{abstract}
+  This entry implements formally verified proof verifier for Metamath called
+  Concretemath, as well as establishes ground for reasoning about formal systems
+  described in Metamath.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}
+
+This paper will describe thoroughly verified proof verifier of Metamath according to it's specification given in Metamath book \cite{metamath}
+
+
+We have no need to formalize all text that may appear in metamath database as we
+should work mostly AST of the metamath formal languages. All non-essential text
+parts of the database will be handled by the parser that will be written as ML
+module.
+
+As well as we have no need in formalizing all text of a database, we have no
+need in formalizing preprocessor directives, that includes database part from
+other file, removes comments, and removes theorems with incomplete proofs.
+
+% include generated text of all theories
+\input{session}
+
+\bibliographystyle{abbrv}
+\bibliography{root}
+
+\end{document}
