@@ -6,19 +6,13 @@ theory ConcreteMath
     (* HOL.Map *)
     (* "HOL-Library.Mapping" *)
     (* "HOL-Library.Finite_Map" *)
-    "HOL-Library.Monad_Syntax"
-    ParserCombinators
+    "Certification_Monads.Parser_Monad"
 begin
 
 text
   "Every following subsection will describe certain types that necessary to
   represent Metamath proof database, and helpful function to work with them,
   alongside with, no less useful, lemmas about them."
-
-(* subsection "Utils"
- *
- * definition guard :: "('a \<Rightarrow> bool) \<Rightarrow> 'a \<Rightarrow> ('a \<Rightarrow> 'b) \<Rightarrow> 'b option" where
- *   "guard p v f = (if p v then Some (f v) else None)" *)
 
 subsection
   "Essential Metamath syntax"
@@ -56,44 +50,136 @@ datatype
   | Axiom axiom_kind label typecode "math_symbol list"
   | Theorem label typecode  "math_symbol list" "proof_kind"
 
-subsection
-  "Grammar"
+subsection "Grammar"
 
 text \<open> In order to follow metamath grammar rules \cite[Appendix E]{metamath} as
   close as possilbe, we will break Isabelle naming convention. But their order
   will be reversed. \<close>
 
+subsubsection "Parsing utils"
+
+definition
+  char_in_range :: "nat \<Rightarrow> nat \<Rightarrow> char \<Rightarrow> bool" where
+  "char_in_range s e c = (let n = of_char c :: nat in s \<le> n \<and> n \<le> e)"
+
+fun
+  definitely :: "string \<Rightarrow> unit parser" where
+  "definitely [] i = Inr ((), i)" |
+  "definitely s [] = Inl (''expecting \"'' @ s @ ''\", but found: EOI'')" |
+  "definitely (s#ss) (i#is) =
+  (if s = i
+   then definitely ss is
+   else err_expecting (s#ss) (i#is))"
+
 subsubsection "Tokens"
 
-type_synonym 'a parser  = "(char, 'a) parser_scheme"
+definition
+  "WHITECHAR_PREDICATE = (\<lambda>c. c \<in> {CHR 0x20, CHR 0x09, CHR 0x0d, CHR 0x0a, CHR 0x0c})"
 
 definition
   WHITECHAR :: "char parser" where
-  "WHITECHAR = satisfy (\<lambda>c. c \<in> {CHR 0x20, CHR 0x09, CHR 0x0d, CHR 0x0a, CHR 0x0c})"
+  "WHITECHAR i =
+  (case i of
+    [] \<Rightarrow> Inl ''expecting WHITECHAR, but found: EOI''
+  | (t#ts) \<Rightarrow> (if WHITECHAR_PREDICATE t then Inr (t, ts) else err_expecting [t] ts))"
 
 definition
-  "PRINTABLE_CHARACTER = satisfy (\<lambda> c. let n = of_char c :: nat in 0x21 \<le> n \<and> n \<le> 0x7e)"
+  WHITECHARS :: "string parser" where
+  "WHITECHARS = many WHITECHAR_PREDICATE"
 
+definition
+  "PRINTABLE_CHARACTER_PREDICATE = char_in_range 0x21 0x7e"
 
+definition
+  PRINTABLE_CHARACTER :: "char parser" where
+  "PRINTABLE_CHARACTER i =
+  (case i of
+    [] \<Rightarrow> Inl ''expecting PRINTABLE_CHARACTER, but found: EOI''
+  | (t#ts) \<Rightarrow> (if PRINTABLE_CHARACTER_PREDICATE t then Inr (t, ts) else err_expecting ''PRINTABLE_CHARACTER'' (t#ts)))"
 
-(* definition
- *   COMMENT :: "unit parser" where
- *   "COMMENT = do {
- *   exactly ''$('';
- *   (do {
- *   manyof1 WHITECHAR;
- *
- *   return ()
- *   });
- *   manyof1 WHITECHAR;
- *   exactly ''$)'';
- *   manyof WHITECHAR;
- *   return ()
- *   }" *)
+definition
+  PRINTABLE_SEQUENCE :: "string parser" where
+  "PRINTABLE_SEQUENCE = do {
+    c \<leftarrow> PRINTABLE_CHARACTER;
+    cs \<leftarrow> many PRINTABLE_CHARACTER_PREDICATE;
+    return (c # cs)
+  }"
 
-(* definition
- *   WHITESPACE :: "unit parser" where
- *   "WHITESPACE = undefined" *)
+text \<open>Following parser should be equivalent to the definition in grammar as don't want to use comment content.\<close>
+definition
+  COMMENT :: "unit parser" where
+  "COMMENT = do {
+    definitely ''$('';
+    WHITECHAR;
+    many (\<lambda>c. ((PRINTABLE_CHARACTER_PREDICATE c) \<or> (WHITECHAR_PREDICATE c)) \<and> (c \<noteq> CHR ''$''));
+    definitely ''$)'';
+    WHITECHAR;
+    return ()
+  }"
+
+definition
+  WHITESPACE :: "unit parser" where
+  "WHITESPACE i =
+  (case WHITECHARS i of
+    Inr x \<Rightarrow> Error_Monad.return ((), [])
+  | Inl err \<Rightarrow> COMMENT i)"
+
+definition
+  "COMPRESSED_PROOF_BLOCK_CHAR_PREDICATE c \<equiv> char_in_range (of_char CHR ''A'') (of_char CHR ''Z'') c \<or> c = CHR ''?''"
+
+definition
+  COMPRESSED_PROOF_BLOCK_CHAR :: "char parser" where
+  "COMPRESSED_PROOF_BLOCK_CHAR i =
+  (case i of
+    [] \<Rightarrow> Inl ''Expected COMPRESSED_PROOF_BLOCK_CHAR''
+  | (t#ts) \<Rightarrow> (if COMPRESSED_PROOF_BLOCK_CHAR_PREDICATE t then Inr (t, ts) else Inl ''Expected COMPRESSED_PROOF_BLOCK_CHAR''))"
+
+definition
+  COMPRESSED_PROOF_BLOCK :: "string parser" where
+  "COMPRESSED_PROOF_BLOCK = do {
+    c \<leftarrow> COMPRESSED_PROOF_BLOCK_CHAR;
+    cs \<leftarrow> many COMPRESSED_PROOF_BLOCK_CHAR_PREDICATE;
+    return (c#cs)
+  } "
+
+definition
+  "LABEL_CHAR_PREDICATE c \<equiv> char_in_range (of_char CHR ''A'') (of_char CHR ''Z'') c
+                            \<or> char_in_range (of_char CHR ''a'') (of_char CHR ''z'') c
+                            \<or> char_in_range (of_char CHR ''0'') (of_char CHR ''9'') c
+                            \<or> c \<in> {CHR ''.'', CHR ''-'', CHR ''_''}"
+
+definition
+  LABEL_CHAR :: "char parser" where
+  "LABEL_CHAR i =
+  (case i of
+    [] \<Rightarrow> Inl ''Expected LABEL_CHAR''
+  | (t#ts) \<Rightarrow> (if LABEL_CHAR_PREDICATE t then Inr (t, ts) else Inl ''Expected LABEL_CHAR''))"
+
+definition
+  LABEL :: "string parser" where
+  "LABEL = do {
+    c \<leftarrow> LABEL_CHAR;
+    cs \<leftarrow> many LABEL_CHAR_PREDICATE;
+    return (c#cs)
+  }"
+
+definition
+  "MATH_SYMBOL_CHAR_PREDICATE c \<equiv> PRINTABLE_CHARACTER_PREDICATE c \<and> c \<noteq> CHR ''$''"
+
+definition
+  MATH_SYMBOL_CHAR :: "char parser" where
+  "MATH_SYMBOL_CHAR i =
+  (case i of
+    [] \<Rightarrow> Inl ''Expected MATH_SYMBOL_CHAR''
+  | (t#ts) \<Rightarrow> (if MATH_SYMBOL_CHAR_PREDICATE t then Inr (t, ts) else Inl ''Expected MATH_SYMBOL_CHAR''))"
+
+definition
+  MATH_SYMBOL :: "string parser" where
+  "MATH_SYMBOL = do {
+    c \<leftarrow> MATH_SYMBOL_CHAR;
+    cs \<leftarrow> many MATH_SYMBOL_CHAR_PREDICATE;
+    return (c#cs)
+  }"
 
 subsubsection "Parser"
 
