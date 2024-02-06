@@ -1,9 +1,44 @@
 section \<open>Parser Combinators\<close>
 theory ParserCombinators
-  imports Main
+  imports
+    Main
+    "HOL-Library.Monad_Syntax"
 begin
 
 type_synonym ('i, 'o) parser_scheme = "'i list \<Rightarrow> ('i list * 'o) option"
+
+definition not_produces_input :: "('i, 'o) parser_scheme \<Rightarrow> bool" where
+  "not_produces_input p = (\<forall>i r v. p i = (Some (r, v)) \<longrightarrow> length r \<le> length i)"
+
+lemma not_produces_input_introduction [intro]:
+  assumes "\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r \<le> length i"
+  shows "not_produces_input p"
+  using assms not_produces_input_def by blast
+
+lemma not_produces_input_elimination [elim]:
+  assumes "not_produces_input p"
+    and "(\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r \<le> length i) \<Longrightarrow> P"
+  shows "P"
+  using assms by (simp add: not_produces_input_def)
+
+definition consumes :: "('i, 'o) parser_scheme \<Rightarrow> bool" where
+  "consumes p = (\<forall>i r v. p i = (Some (r, v)) \<longrightarrow> length r < length i)"
+
+lemma consumes_introduction [intro]:
+  assumes "\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r < length i"
+  shows "consumes p"
+  using assms consumes_def by blast
+
+lemma consumes_elimination [elim]:
+  assumes "consumes p"
+    and "(\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r < length i) \<Longrightarrow> P"
+  shows "P"
+  using assms by (simp add: consumes_def)
+
+lemma consumes_implies_not_produces_input:
+  "consumes p \<Longrightarrow> not_produces_input p"
+  unfolding not_produces_input_def consumes_def
+  by (simp add: nat_less_le)
 
 subsection \<open>Primitive Combinators\<close>
 
@@ -32,6 +67,9 @@ definition
        None \<Rightarrow> None
      | Some (rest, output) \<Rightarrow> k output rest)"
 
+adhoc_overloading
+  Monad_Syntax.bind bind
+
 definition
   map :: "('a \<Rightarrow> 'b) \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "<$>" 4) where
   "map f p i =
@@ -57,12 +95,20 @@ where
       Some output \<Rightarrow> Some output
     | None \<Rightarrow> p2 i)"
 
-(* definition
- *   many :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'a list) parser_scheme" where
- *   "many p i =
- *   (case p i of
- *      Some x \<Rightarrow> undefined
- *    | None \<Rightarrow> Some [])" *)
+value "
+  (do {
+  x \<leftarrow> (pure 1 :: (char, nat) parser_scheme);
+  y \<leftarrow> pure 3;
+  pure (x + y)
+}) ''hi''"
+
+(* value "Rep_parser_scheme_consumes" *)
+
+(* do {
+ *     (i', v) \<leftarrow> Rep_parser_scheme_consumes p i;
+ *     (i'', vs) \<leftarrow> many p i';
+ *     Some (i'', v # vs)
+ *   } *)
 
 subsection \<open>Additional combinators\<close>
 
@@ -74,6 +120,39 @@ definition
   amap :: "('i, ('a \<Rightarrow> 'b)) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "<*>" 4)
 where
   "amap pf px = ((\<lambda>(f, x). f x) <$> (product pf px))"
+
+typedef ('i, 'o) parser_scheme_many = "{p::('i, 'o) parser_scheme. (consumes p)}"
+morphisms rep_many abs_many
+by auto
+
+setup_lifting type_definition_parser_scheme_many
+
+function (sequential)
+  many_aux :: "('i, 'a) parser_scheme_many \<Rightarrow> 'a list \<Rightarrow> ('i, 'a list) parser_scheme" where
+  "many_aux p acc i =
+  (case rep_many p i of
+    None \<Rightarrow> Some (i, acc)
+  | Some (i', a) \<Rightarrow>
+    (case many_aux p (a # acc) i' of
+      None \<Rightarrow> undefined
+    | Some (i'', a') \<Rightarrow> Some (i'', a')))"
+by pat_completeness auto
+
+termination many_aux
+proof
+  show "wf (measure (\<lambda>(p, a, i). length i))" by simp
+next
+  fix p acc i x2 x y
+  assume "rep_many p i = Some x2"
+    and "(x, y) = x2"
+  hence "length x < length i" using rep_many by fastforce
+  thus "((p, y # acc, x), p, acc, i)
+    \<in> measure (\<lambda>(p, a, y). length y)" by auto
+qed
+
+definition
+  many :: "('i, 'a) parser_scheme_many \<Rightarrow> ('i, 'a list) parser_scheme" where
+  "many p = (rev <$> many_aux p [])"
 
 definition
   right :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "*>" 4)
@@ -93,9 +172,9 @@ definition
   optional :: "('i, 'o) parser_scheme \<Rightarrow> ('i, 'o option) parser_scheme" where
   "optional p = (Some <$> p <|> pure None)"
 
-definition
-  many1 :: "('i, 'o) parser_scheme \<Rightarrow> ('i, 'o option) parser_scheme" where
-  "many1 p = undefined"
+(* definition
+ *   many1 :: "('i, 'o) parser_scheme \<Rightarrow> ('i, 'o list) parser_scheme" where
+ *   "many1 p = ((#) <$> p <*> many p)" *)
 
 subsection \<open>Main properties\<close>
 
@@ -145,39 +224,6 @@ subsubsection \<open>Consumption analysis\<close>
 
 text \<open>We define two type of predicates that check if parser not producs new input both strict and non-strict.\<close>
 
-definition not_produces_input :: "('i, 'o) parser_scheme \<Rightarrow> bool" where
-  "not_produces_input p = (\<forall>i r v. p i = (Some (r, v)) \<longrightarrow> length r \<le> length i)"
-
-lemma not_produces_input_introduction [intro]:
-  assumes "\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r \<le> length i"
-  shows "not_produces_input p"
-  using assms not_produces_input_def by blast
-
-lemma not_produces_input_elimination [elim]:
-  assumes "not_produces_input p"
-    and "(\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r \<le> length i) \<Longrightarrow> P"
-  shows "P"
-  using assms by (simp add: not_produces_input_def)
-
-definition consumes :: "('i, 'o) parser_scheme \<Rightarrow> bool" where
-  "consumes p = (\<forall>i r v. p i = (Some (r, v)) \<longrightarrow> length r < length i)"
-
-lemma consumes_introduction [intro]:
-  assumes "\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r < length i"
-  shows "consumes p"
-  using assms consumes_def by blast
-
-lemma consumes_elimination [elim]:
-  assumes "consumes p"
-    and "(\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r < length i) \<Longrightarrow> P"
-  shows "P"
-  using assms by (simp add: consumes_def)
-
-lemma consumes_implies_not_produces_input:
-  "consumes p \<Longrightarrow> not_produces_input p"
-  unfolding not_produces_input_def consumes_def
-  by (simp add: nat_less_le)
-
 lemma fail_not_produce_input [intro]:
   "not_produces_input fail"
   by (simp add: not_produces_input_def fail_def)
@@ -215,5 +261,26 @@ lemma either_consumption:
 lemma either_not_procuces_input:
   "not_produces_input (either p q) \<Longrightarrow> not_produces_input p \<or> not_produces_input q"
   by (simp add: not_produces_input_def either_def)
+
+lemma symbol_consumption[intro]:
+  "consumes (symbol c)" by (simp add: satisfy_consumes symbol_def)
+
+(* find_theorems "abs_many"
+ *
+ * lemma "(satisfy P) \<in> {p. consumes p}"
+ * by blast
+ *
+ * lift_definition Satisfy :: "('i \<Rightarrow> bool) \<Rightarrow> ('i, 'i) parser_scheme_many" is satisfy
+ * by auto
+ *
+ * value "(Satisfy (\<lambda>c. c = CHR ''x'')) :: (char, char) parser_scheme_many"
+ *
+ *
+ * definition
+ *   "exes = many (Satisfy (\<lambda>c. c = CHR ''x''))"
+ *
+ * value "many (Satisfy (\<lambda>c. c = CHR ''x'')) ''xxxxxkj''"
+ *
+ * export_code exes in Haskell *)
 
 end
