@@ -73,7 +73,7 @@ definition
      | x#xs \<Rightarrow> if P x then Inr (xs, x) else error ''hi'')"
 
 definition
-  bind :: "('i, 'a) parser_scheme \<Rightarrow> ('a \<Rightarrow> ('i, 'b) parser_scheme) \<Rightarrow> ('i, 'b) parser_scheme" (infixl ">>=" 1) where
+  bind :: "('i, 'a) parser_scheme \<Rightarrow> ('a \<Rightarrow> ('i, 'b) parser_scheme) \<Rightarrow> ('i, 'b) parser_scheme" where
   "bind p k i =
     (case p i of
        Inl err \<Rightarrow> Inl err
@@ -83,7 +83,7 @@ adhoc_overloading
   Monad_Syntax.bind bind
 
 definition
-  map :: "('a \<Rightarrow> 'b) \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "<$>" 4) where
+  map :: "('a \<Rightarrow> 'b) \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "<$>" 58) where
   "map f p i =
     (case p i of
        Inl err \<Rightarrow> Inl err
@@ -100,7 +100,7 @@ definition
         | Inr (i2, v2) \<Rightarrow> Inr (i2, (v1, v2))))"
 
 definition
-  either :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme" (infixl "<|>" 3)
+  either :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme" (infixl "<|>" 57)
 where
   "either p1 p2 i =
     (case p1 i of
@@ -114,23 +114,23 @@ abbreviation
   "empty \<equiv> fail ''''"
 
 definition
-  amap :: "('i, ('a \<Rightarrow> 'b)) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "<*>" 4)
+  amap :: "('i, ('a \<Rightarrow> 'b)) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "<*>" 58)
 where
   "amap pf px = ((\<lambda>(f, x). f x) <$> (product pf px))"
 
 definition
-  right :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "*>" 4)
+  right :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "*>" 58)
 where
   "right p q = ((\<lambda>x.\<lambda>y. y) <$> p <*> q)"
 
 definition
-  left :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme" (infixl "<*" 4)
+  left :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme" (infixl "<*" 58)
 where
   "left p q = ((\<lambda>x.\<lambda>y. x) <$> p <*> q)"
 
 definition
-  symbol :: "'i \<Rightarrow> ('i, 'i::show) parser_scheme" where
-  "symbol s = (satisfy (\<lambda>x. x = s) <|> (expected (''symbol `'' @ show s @ ''`'')))"
+  entry :: "'i \<Rightarrow> ('i, 'i::show) parser_scheme" where
+  "entry s = (satisfy (\<lambda>x. x = s) <|> (expected (''entry `'' @ show s @ ''`'')))"
 
 definition
   optional :: "('i, 'o) parser_scheme \<Rightarrow> ('i, 'o option) parser_scheme" where
@@ -155,13 +155,16 @@ next
   assume "rep_greedy p i = Inr x2"
     and "(x, y) = x2"
   hence "length x < length i" using rep_greedy by fastforce
-  thus "((p, y # acc, x), p, acc, i)
-    \<in> measure (\<lambda>(p, a, y). length y)" by auto
+  thus "((p, y # acc, x), p, acc, i) \<in> measure (\<lambda>(p, a, y). length y)" by auto
 qed
 
 definition
   many :: "('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'a list) parser_scheme" where
   "many p = (rev <$> many_aux p [])"
+
+definition
+  many1 :: "('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'a list) parser_scheme" where
+  "many1 p = ((#) <$> (rep_greedy p) <*> many p)"
 
 subsection \<open>Main properties\<close>
 
@@ -211,7 +214,7 @@ lemma alternative_associativity:
 
 subsubsection \<open>Consumption analysis\<close>
 
-text \<open>We define two type of predicates that check if parser not producs new input both strict and non-strict.\<close>
+text \<open>We've defined two type of predicates that check if parser not producs new input both strict and non-strict.\<close>
 
 lemma fail_is_parser [intro]:
   "is_parser (fail s)"
@@ -224,6 +227,11 @@ lemma pure_is_parser [intro]:
 lemma satisfy_is_greedy_parser [intro]:
   "greedy_parser (satisfy P)"
   by (simp add: greedy_parser_def list.case_eq_if satisfy_def expected_def)
+
+lemma bind_is_greedy_parser [intro]:
+  assumes "greedy_parser p" and "\<And>x. greedy_parser (f x)" shows "greedy_parser (bind p f)"
+  unfolding greedy_parser_def
+  by (smt (verit) Inl_Inr_False ParserCombinators.bind_def assms greedy_parserE order_less_trans prod.split_sel split_beta sum.case_eq_if sum.collapse(2) sum.disc(2))
 
 lemma map_is_greedy_parser [intro]:
   assumes "greedy_parser p" shows "greedy_parser (map f p)"
@@ -240,7 +248,7 @@ lemma either_greedy_parsers:
   unfolding either_def greedy_parser_def
   by (metis assms either_def greedy_parser_def sum.case(2))
 
-lemma either_is_greedy_parser:
+lemma either_is_greedy_parser [intro]:
   assumes "greedy_parser p" and "greedy_parser q" shows "greedy_parser (either p q)"
   unfolding either_def
   by (metis (mono_tags, lifting) assms greedy_parser_def sum.case_eq_if sum.collapse(2))
@@ -250,7 +258,7 @@ lemma either_parsers:
   unfolding is_parser_def either_def
   by (metis assms either_def is_parser_def sum.case(2))
 
-lemma either_is_parser:
+lemma either_is_parser [intro]:
   assumes "is_parser p" and "is_parser q" shows "is_parser (either p q)"
   unfolding either_def
   by (smt (verit) assms is_parser_def sum.case_eq_if sum.disc(2) sum.expand sum.sel(2))
@@ -264,9 +272,60 @@ lemma greedy_parser_either_expected [simp]:
   unfolding expected_def
   by (smt (verit, best) Inl_Inr_False either_def either_is_greedy_parser greedy_parser_def sum.case(2))
 
-lemma symbol_consumption[intro]:
-  "greedy_parser (symbol c)"
-  unfolding symbol_def
+lemma amap_is_greedy_parser [intro]:
+  assumes "greedy_parser pf" and "greedy_parser px" shows "greedy_parser (amap pf px)"
+  by (simp add: amap_def assms(1) assms(2) map_is_greedy_parser product_is_greedy_parser)
+
+lemma right_is_greedy_parser [intro]:
+  assumes "greedy_parser p" and "greedy_parser q" shows "greedy_parser (right p q)"
+  by (simp add: amap_is_greedy_parser assms map_is_greedy_parser right_def)
+
+lemma left_is_greedy_parser [intro]:
+  assumes "greedy_parser p" and "greedy_parser q" shows "greedy_parser (left p q)"
+  by (simp add: amap_is_greedy_parser assms map_is_greedy_parser left_def)
+
+lemma entry_is_greedy_parser[intro]:
+  "greedy_parser (entry c)"
+  unfolding entry_def
   by (simp add: satisfy_is_greedy_parser)
+
+lemma optional_is_parser[intro]:
+  assumes "is_parser p" shows "is_parser (optional p)"
+  unfolding optional_def
+  by (smt (z3) ParserCombinators.map_def assms case_prod_unfold either_def eq_fst_iff is_parserE is_parserI old.sum.simps(5) pure_is_parser sum.case_eq_if sum.collapse(2) sum.sel(2))
+
+subsection \<open>Greedy lifted definitions\<close>
+
+text \<open>In order to construct parsers that repeat many times we introduce convention for lifted defintions of greedy parsers - postfix `G`.\<close>
+
+lift_definition satisfyG :: "('i \<Rightarrow> bool) \<Rightarrow> ('i::show, 'i) greedy_parser_scheme"
+  is satisfy by blast
+
+lift_definition bindG :: "('i, 'a) greedy_parser_scheme \<Rightarrow> ('a \<Rightarrow> ('i, 'b) greedy_parser_scheme) \<Rightarrow> ('i, 'b) greedy_parser_scheme"
+  is bind by blast
+
+adhoc_overloading
+  Monad_Syntax.bind bindG
+
+lift_definition mapG :: "('a \<Rightarrow> 'b) \<Rightarrow> ('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'b) greedy_parser_scheme" (infixl "<$>G" 58)
+  is map by blast
+
+lift_definition productG :: "('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'b) greedy_parser_scheme \<Rightarrow> ('i, 'a \<times> 'b) greedy_parser_scheme"
+  is product by blast
+
+lift_definition eitherG :: "('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'a) greedy_parser_scheme" (infixl "<|>G" 57)
+  is either by blast
+
+lift_definition amapG :: "('i, ('a \<Rightarrow> 'b)) greedy_parser_scheme \<Rightarrow> ('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'b) greedy_parser_scheme" (infixl "<*>G" 58)
+  is amap by blast
+
+lift_definition rightG :: "('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'b) greedy_parser_scheme \<Rightarrow> ('i, 'b) greedy_parser_scheme" (infixl "*>G" 58)
+  is right by blast
+
+lift_definition leftG :: "('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'b) greedy_parser_scheme \<Rightarrow> ('i, 'a) greedy_parser_scheme" (infixl "<*G" 58)
+  is left by blast
+
+lift_definition entryG :: "'i \<Rightarrow> ('i, 'i::show) greedy_parser_scheme"
+  is entry by blast
 
 end
