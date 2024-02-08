@@ -2,70 +2,82 @@ section \<open>Parser Combinators\<close>
 theory ParserCombinators
   imports
     Main
+    Show.Show
     "HOL-Library.Monad_Syntax"
+    Certification_Monads.Error_Monad
 begin
 
-type_synonym ('i, 'o) parser_scheme = "'i list \<Rightarrow> ('i list * 'o) option"
+type_synonym error_message_type = string
 
-definition not_produces_input :: "('i, 'o) parser_scheme \<Rightarrow> bool" where
-  "not_produces_input p = (\<forall>i r v. p i = (Some (r, v)) \<longrightarrow> length r \<le> length i)"
+type_synonym ('i, 'o) parser_scheme = "'i list \<Rightarrow> error_message_type + ('i list \<times> 'o)"
 
-lemma not_produces_input_introduction [intro]:
-  assumes "\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r \<le> length i"
-  shows "not_produces_input p"
-  using assms not_produces_input_def by blast
+definition is_parser :: "('i, 'o) parser_scheme \<Rightarrow> bool" where
+  "is_parser p \<equiv> \<forall>i r v. p i = return (r, v) \<longrightarrow> length i \<ge> length r"
 
-lemma not_produces_input_elimination [elim]:
-  assumes "not_produces_input p"
-    and "(\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r \<le> length i) \<Longrightarrow> P"
+lemma is_parserI [intro]:
+  assumes "\<And>i r v. p i = return (r, v) \<Longrightarrow> length i \<ge> length r"
+  shows "is_parser p"
+  using assms is_parser_def by blast
+
+lemma is_parserE [elim]:
+  assumes "is_parser p"
+    and "(\<And>i r v. p i = return (r, v) \<Longrightarrow> length i \<ge> length r) \<Longrightarrow> P"
   shows "P"
-  using assms by (simp add: not_produces_input_def)
+  using assms by (simp add: is_parser_def)
 
-definition consumes :: "('i, 'o) parser_scheme \<Rightarrow> bool" where
-  "consumes p = (\<forall>i r v. p i = (Some (r, v)) \<longrightarrow> length r < length i)"
+definition greedy_parser :: "('i, 'o) parser_scheme \<Rightarrow> bool" where
+  "greedy_parser p \<equiv> \<forall>i r v. p i = return (r, v) \<longrightarrow> length i > length r"
 
-lemma consumes_introduction [intro]:
-  assumes "\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r < length i"
-  shows "consumes p"
-  using assms consumes_def by blast
+lemma greedy_parserI [intro]:
+  assumes "\<And>i r v. p i = return (r, v) \<Longrightarrow> length i > length r"
+  shows "greedy_parser p"
+  using assms greedy_parser_def by blast
 
-lemma consumes_elimination [elim]:
-  assumes "consumes p"
-    and "(\<And>i r v. p i = (Some (r, v)) \<Longrightarrow> length r < length i) \<Longrightarrow> P"
+lemma greedy_parserE [elim]:
+  assumes "greedy_parser p"
+    and "(\<And>i r v. p i = return (r, v) \<Longrightarrow> length i > length r) \<Longrightarrow> P"
   shows "P"
-  using assms by (simp add: consumes_def)
+  using assms by (simp add: greedy_parser_def)
 
-lemma consumes_implies_not_produces_input:
-  "consumes p \<Longrightarrow> not_produces_input p"
-  unfolding not_produces_input_def consumes_def
+lemma greedy_parser_implies_is_parser:
+  "greedy_parser p \<Longrightarrow> is_parser p"
+  unfolding is_parser_def greedy_parser_def
   by (simp add: nat_less_le)
+
+typedef ('i, 'o) greedy_parser_scheme = "{p::('i, 'o) parser_scheme. (greedy_parser p)}"
+morphisms rep_greedy abs_greedy
+by auto
+
+setup_lifting type_definition_greedy_parser_scheme
+
+definition expected :: "string \<Rightarrow> ('t::show, 'a) parser_scheme" where
+  "expected msg ts = error
+    (''Expected '' @ msg @ '', but found: '' @ shows_quote (shows (take 30 ts)) [])"
 
 subsection \<open>Primitive Combinators\<close>
 
 definition
-  fail :: "('i, 'o) parser_scheme" where
-  "fail i = None"
+  fail :: "error_message_type \<Rightarrow> ('i, 'o) parser_scheme" where
+  "fail msg i = error msg"
 
 definition
   pure :: "'o \<Rightarrow> ('i, 'o) parser_scheme" where
-  "pure output i = Some (i, output)"
-
-text \<open>Returns input value if it equal to expected\<close>
+  "pure output i = return (i, output)"
 
 (* TODO: Add show*)
 definition
-  satisfy :: "('i \<Rightarrow> bool) \<Rightarrow> ('i, 'i) parser_scheme" where
+  satisfy :: "('i \<Rightarrow> bool) \<Rightarrow> ('i::show, 'i) parser_scheme" where
   "satisfy P xs =
     (case xs of
-       []   \<Rightarrow> None
-     | x#xs \<Rightarrow> if P x then Some (xs, x) else None)"
+       []   \<Rightarrow> expected ''symbol that satisfies predicate'' xs
+     | x#xs \<Rightarrow> if P x then Inr (xs, x) else error ''hi'')"
 
 definition
   bind :: "('i, 'a) parser_scheme \<Rightarrow> ('a \<Rightarrow> ('i, 'b) parser_scheme) \<Rightarrow> ('i, 'b) parser_scheme" (infixl ">>=" 1) where
   "bind p k i =
     (case p i of
-       None \<Rightarrow> None
-     | Some (rest, output) \<Rightarrow> k output rest)"
+       Inl err \<Rightarrow> Inl err
+     | Inr (rest, output) \<Rightarrow> k output rest)"
 
 adhoc_overloading
   Monad_Syntax.bind bind
@@ -74,85 +86,37 @@ definition
   map :: "('a \<Rightarrow> 'b) \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "<$>" 4) where
   "map f p i =
     (case p i of
-       None \<Rightarrow> None
-     | Some (i', v) \<Rightarrow> Some (i', f v))"
+       Inl err \<Rightarrow> Inl err
+     | Inr (i', v) \<Rightarrow> Inr (i', f v))"
 
 definition
   product :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme \<Rightarrow> ('i, 'a \<times> 'b) parser_scheme" where
   "product p1 p2 i =
     (case p1 i of
-       None \<Rightarrow> None
-     | Some (i1, v1) \<Rightarrow>
+       Inl err \<Rightarrow> Inl err
+     | Inr (i1, v1) \<Rightarrow>
        (case p2 i1 of
-          None \<Rightarrow> None
-        | Some (i2, v2) \<Rightarrow> Some (i2, (v1, v2))))"
+          Inl err' \<Rightarrow> Inl err'
+        | Inr (i2, v2) \<Rightarrow> Inr (i2, (v1, v2))))"
 
 definition
   either :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme" (infixl "<|>" 3)
 where
   "either p1 p2 i =
     (case p1 i of
-      Some output \<Rightarrow> Some output
-    | None \<Rightarrow> p2 i)"
-
-value "
-  (do {
-  x \<leftarrow> (pure 1 :: (char, nat) parser_scheme);
-  y \<leftarrow> pure 3;
-  pure (x + y)
-}) ''hi''"
-
-(* value "Rep_parser_scheme_consumes" *)
-
-(* do {
- *     (i', v) \<leftarrow> Rep_parser_scheme_consumes p i;
- *     (i'', vs) \<leftarrow> many p i';
- *     Some (i'', v # vs)
- *   } *)
+      Inr output \<Rightarrow> Inr output
+    | Inl _ \<Rightarrow> p2 i)"
 
 subsection \<open>Additional combinators\<close>
 
 abbreviation
   empty :: "('i, 'o) parser_scheme" where
-  "empty \<equiv> fail"
+  "empty \<equiv> fail ''''"
 
 definition
   amap :: "('i, ('a \<Rightarrow> 'b)) parser_scheme \<Rightarrow> ('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "<*>" 4)
 where
   "amap pf px = ((\<lambda>(f, x). f x) <$> (product pf px))"
-
-typedef ('i, 'o) parser_scheme_many = "{p::('i, 'o) parser_scheme. (consumes p)}"
-morphisms rep_many abs_many
-by auto
-
-setup_lifting type_definition_parser_scheme_many
-
-function (sequential)
-  many_aux :: "('i, 'a) parser_scheme_many \<Rightarrow> 'a list \<Rightarrow> ('i, 'a list) parser_scheme" where
-  "many_aux p acc i =
-  (case rep_many p i of
-    None \<Rightarrow> Some (i, acc)
-  | Some (i', a) \<Rightarrow>
-    (case many_aux p (a # acc) i' of
-      None \<Rightarrow> undefined
-    | Some (i'', a') \<Rightarrow> Some (i'', a')))"
-by pat_completeness auto
-
-termination many_aux
-proof
-  show "wf (measure (\<lambda>(p, a, i). length i))" by simp
-next
-  fix p acc i x2 x y
-  assume "rep_many p i = Some x2"
-    and "(x, y) = x2"
-  hence "length x < length i" using rep_many by fastforce
-  thus "((p, y # acc, x), p, acc, i)
-    \<in> measure (\<lambda>(p, a, y). length y)" by auto
-qed
-
-definition
-  many :: "('i, 'a) parser_scheme_many \<Rightarrow> ('i, 'a list) parser_scheme" where
-  "many p = (rev <$> many_aux p [])"
 
 definition
   right :: "('i, 'a) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme \<Rightarrow> ('i, 'b) parser_scheme" (infixl "*>" 4)
@@ -165,27 +129,50 @@ where
   "left p q = ((\<lambda>x.\<lambda>y. x) <$> p <*> q)"
 
 definition
-  symbol :: "'i \<Rightarrow> ('i, 'i) parser_scheme" where
-  "symbol s = satisfy (\<lambda>x. x = s)"
+  symbol :: "'i \<Rightarrow> ('i, 'i::show) parser_scheme" where
+  "symbol s = (satisfy (\<lambda>x. x = s) <|> (expected (''symbol `'' @ show s @ ''`'')))"
 
 definition
   optional :: "('i, 'o) parser_scheme \<Rightarrow> ('i, 'o option) parser_scheme" where
   "optional p = (Some <$> p <|> pure None)"
 
-(* definition
- *   many1 :: "('i, 'o) parser_scheme \<Rightarrow> ('i, 'o list) parser_scheme" where
- *   "many1 p = ((#) <$> p <*> many p)" *)
+function (sequential)
+  many_aux :: "('i, 'a) greedy_parser_scheme \<Rightarrow> 'a list \<Rightarrow> ('i, 'a list) parser_scheme" where
+  "many_aux p acc i =
+  (case rep_greedy p i of
+    Inl _ \<Rightarrow> Inr (i, acc)
+  | Inr (i', a) \<Rightarrow>
+    (case many_aux p (a # acc) i' of
+      Inl _ \<Rightarrow> undefined
+    | Inr (i'', a') \<Rightarrow> Inr (i'', a')))"
+by pat_completeness auto
+
+termination many_aux
+proof
+  show "wf (measure (\<lambda>(p, a, i). length i))" by simp
+next
+  fix p acc i x2 x y
+  assume "rep_greedy p i = Inr x2"
+    and "(x, y) = x2"
+  hence "length x < length i" using rep_greedy by fastforce
+  thus "((p, y # acc, x), p, acc, i)
+    \<in> measure (\<lambda>(p, a, y). length y)" by auto
+qed
+
+definition
+  many :: "('i, 'a) greedy_parser_scheme \<Rightarrow> ('i, 'a list) parser_scheme" where
+  "many p = (rev <$> many_aux p [])"
 
 subsection \<open>Main properties\<close>
 
 lemma map_id [simp, code_unfold]:
   "(id <$> p) = p" unfolding map_def
-  by (auto split: option.split)
+  by (auto split: sum.split)
 
 lemma pure_f_amap [simp, code_unfold]:
   "(pure f <*> p) = (f <$> p)"
   unfolding amap_def map_def pure_def product_def
-  by (auto split: option.split)
+  by (auto split: sum.split)
 
 lemma applicative_identity [simp, code_unfold]:
   "(pure id <*> p) = p"
@@ -194,93 +181,92 @@ lemma applicative_identity [simp, code_unfold]:
 lemma applicative_homomorphism [simp, code_unfold]:
   "(pure f <*> pure x) = pure (f x)"
   unfolding map_def pure_def amap_def product_def
-  by (auto split: option.split)
+  by (auto split: sum.split)
 
 lemma applicative_interchange:
   "(u <*> pure x) = (pure (\<lambda>f. f x) <*> u)"
   unfolding product_def pure_def amap_def map_def
-  by (auto split: option.split)
+  by (auto split: sum.split)
 
 lemma applicative_composition [simp]:
   "(((pure (\<circ>) <*> u) <*> v) <*> w) = (u <*> (v <*> w))"
   unfolding pure_def map_def amap_def product_def
-  by (auto split: option.split)
+  by (auto split: sum.split)
 
 lemma alternative_identity_left [simp, code_unfold]:
   "(empty <|> u) = u"
   unfolding empty_def fail_def either_def
   by simp
 
-lemma alternative_identity_right [simp, code_unfold]:
-  "(p <|> empty) = p" unfolding either_def fail_def
-  by (auto split: option.split)
+(* NOTE: Broken due to migration to sum type *)
+(* lemma alternative_identity_right [simp, code_unfold]:
+ *   "(p <|> empty) = p"
+ *   unfolding either_def empty_def fail_def
+ *   by (auto split: sum.split) *)
 
 lemma alternative_associativity:
   "(u <|> (v <|> w)) = ((u <|> v) <|> w)"
   unfolding either_def
-  by (auto split: option.split)
+  by (auto split: sum.split)
 
 subsubsection \<open>Consumption analysis\<close>
 
 text \<open>We define two type of predicates that check if parser not producs new input both strict and non-strict.\<close>
 
-lemma fail_not_produce_input [intro]:
-  "not_produces_input fail"
-  by (simp add: not_produces_input_def fail_def)
+lemma fail_is_parser [intro]:
+  "is_parser (fail s)"
+  by (simp add: is_parser_def fail_def)
 
-lemma pure_not_produces_input [intro]:
-  "not_produces_input (pure x)"
-  by (simp add: not_produces_input_def pure_def)
+lemma pure_is_parser [intro]:
+  "is_parser (pure x)"
+  by (simp add: is_parser_def pure_def)
 
-lemma satisfy_consumes [intro]:
-  "consumes (satisfy P)"
-  by (simp add: consumes_def list.case_eq_if satisfy_def)
+lemma satisfy_is_greedy_parser [intro]:
+  "greedy_parser (satisfy P)"
+  by (simp add: greedy_parser_def list.case_eq_if satisfy_def expected_def)
 
-lemma map_not_produces_input [intro]:
-  assumes "consumes p \<or> not_produces_input p" shows "not_produces_input (map f p)"
-  using assms unfolding not_produces_input_def consumes_def map_def
-  by (smt (verit, del_insts) fstI less_imp_le_nat option.case_eq_if option.distinct(1) option.exhaust_sel option.sel prod.collapse split_beta)
+lemma map_is_greedy_parser [intro]:
+  assumes "greedy_parser p" shows "greedy_parser (map f p)"
+  using assms unfolding is_parser_def greedy_parser_def map_def
+  by (smt (verit, best) Inl_Inr_False Inr_inject fstI old.prod.exhaust old.sum.exhaust split_beta sum.case(1) sum.case(2))
 
-lemma product_not_produces_input [intro]:
-  assumes "consumes p \<or> not_produces_input p" and "consumes q \<or> not_produces_input q" shows "not_produces_input (product p q)"
-proof
-  fix i r v
-  assume "product p q i = Some (r, v)"
-  then obtain i' x y
-    where P: "p i = Some (i', x )" and Q: "q i' = Some (r, y)"
-    unfolding product_def
-    by (smt (verit) Pair_inject option.case_eq_if option.distinct(1) option.exhaust_sel option.sel prod.collapse split_beta)
-  show "product p q i = Some (r, v) \<Longrightarrow> length r \<le> length i"
-    by (meson P Q assms consumes_implies_not_produces_input not_produces_input_elimination order_trans)
-qed
+lemma product_is_greedy_parser [intro]:
+  assumes "greedy_parser p" and "greedy_parser q" shows "greedy_parser (product p q)"
+  unfolding product_def greedy_parser_def
+  by (smt (verit, best) Inl_Inr_False assms dual_order.strict_trans2 fstI greedy_parserE less_imp_le_nat prod.collapse split_beta sum.case_eq_if sum.collapse(2) sum.sel(2))
 
-lemma either_consumption:
-  "consumes (either p q) \<Longrightarrow> consumes p \<or> consumes q"
-  by (simp add: consumes_def either_def)
+lemma either_greedy_parsers:
+  assumes "greedy_parser (either p q)" shows "greedy_parser p \<or> greedy_parser q"
+  unfolding either_def greedy_parser_def
+  by (metis assms either_def greedy_parser_def sum.case(2))
 
-lemma either_not_procuces_input:
-  "not_produces_input (either p q) \<Longrightarrow> not_produces_input p \<or> not_produces_input q"
-  by (simp add: not_produces_input_def either_def)
+lemma either_is_greedy_parser:
+  assumes "greedy_parser p" and "greedy_parser q" shows "greedy_parser (either p q)"
+  unfolding either_def
+  by (metis (mono_tags, lifting) assms greedy_parser_def sum.case_eq_if sum.collapse(2))
+
+lemma either_parsers:
+  assumes "is_parser (either p q)" shows "is_parser p \<or> is_parser q"
+  unfolding is_parser_def either_def
+  by (metis assms either_def is_parser_def sum.case(2))
+
+lemma either_is_parser:
+  assumes "is_parser p" and "is_parser q" shows "is_parser (either p q)"
+  unfolding either_def
+  by (smt (verit) assms is_parser_def sum.case_eq_if sum.disc(2) sum.expand sum.sel(2))
+
+lemma greedy_parser_either_fail [simp]:
+  "greedy_parser (p <|> fail s) = greedy_parser p"
+  by (metis (mono_tags, lifting) Inl_Inr_False either_def either_is_greedy_parser fail_def greedy_parser_def old.sum.simps(6))
+
+lemma greedy_parser_either_expected [simp]:
+  "greedy_parser (p <|> expected s) = greedy_parser p"
+  unfolding expected_def
+  by (smt (verit, best) Inl_Inr_False either_def either_is_greedy_parser greedy_parser_def sum.case(2))
 
 lemma symbol_consumption[intro]:
-  "consumes (symbol c)" by (simp add: satisfy_consumes symbol_def)
-
-(* find_theorems "abs_many"
- *
- * lemma "(satisfy P) \<in> {p. consumes p}"
- * by blast
- *
- * lift_definition Satisfy :: "('i \<Rightarrow> bool) \<Rightarrow> ('i, 'i) parser_scheme_many" is satisfy
- * by auto
- *
- * value "(Satisfy (\<lambda>c. c = CHR ''x'')) :: (char, char) parser_scheme_many"
- *
- *
- * definition
- *   "exes = many (Satisfy (\<lambda>c. c = CHR ''x''))"
- *
- * value "many (Satisfy (\<lambda>c. c = CHR ''x'')) ''xxxxxkj''"
- *
- * export_code exes in Haskell *)
+  "greedy_parser (symbol c)"
+  unfolding symbol_def
+  by (simp add: satisfy_is_greedy_parser)
 
 end
