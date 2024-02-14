@@ -691,7 +691,7 @@ definition
 subsection \<open>Common parsers\<close>
 
 subsubsection \<open>Ascii white space\<close>
-text \<open>Removes all characters that belong to ASCII white space characters: ' ', '\t', '\r', '\n', '\f', '\v'\<close>
+text \<open>Removes all characters that belong to ASCII white space characters: ' ', '\verb!\t!', '\verb!\r!', '\verb!\n!', '\verb!\f!', '\verb!\v!'\<close>
 definition
   ascii_space_chars :: "char list" where
   "ascii_space_chars = List.map char_of [0x20::nat, 0x9, 0xd, 0xa, 0xc, 0xb]"
