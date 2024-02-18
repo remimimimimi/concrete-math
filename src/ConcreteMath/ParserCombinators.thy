@@ -112,6 +112,25 @@ lift_definition
   pure :: "'o \<Rightarrow> ('i, 'o) parser_scheme"
   is pure_raw by blast
 
+subsubsection \<open>End of input\<close>
+definition
+  eoi_raw :: "('i::show, unit) parser_function" where
+  "eoi_raw i =
+  (if i = []
+    then Inr (i, Unity)
+    else expected_raw ''end of input'' i)"
+
+lemma eoi_raw_is_parser [intro]:
+  "is_parser (eoi_raw)"
+  unfolding eoi_raw_def is_parser_def
+  using expected_raw_is_parser
+  by (metis dual_order.refl is_parserE old.prod.inject sum.inject(2))
+
+
+lift_definition
+  eoi :: "('i::show, unit) parser_scheme"
+  is eoi_raw by blast
+
 subsubsection \<open>Satisfy\<close>
 definition
   satisfy_raw :: "('i \<Rightarrow> bool) \<Rightarrow> ('i::show, 'i) parser_function" where
